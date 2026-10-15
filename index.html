@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASTEROID SURVIVOR</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background: #080810;
+      color: #fff;
+      font-family: monospace;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    #game {
+      position: relative;
+      width: 100%;
+      max-width: 440px;
+      height: 100vh;
+      max-height: 640px;
+      border: 2px solid #00f3ff;
+      box-shadow: 0 0 20px #00f3ff55;
+      background: #020208;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    .ui {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 12px;
+      font-weight: bold;
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(2, 2, 10, 0.85);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 15px;
+      pointer-events: auto;
+      text-align: center;
+    }
+
+    h1 {
+      color: #00f3ff;
+      text-shadow: 0 0 10px #00f3ff;
+      font-size: 26px;
+    }
+
+    .btn {
+      padding: 10px 22px;
+      background: #ff0055;
+      border: none;
+      color: #fff;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      box-shadow: 0 0 12px #ff0055;
+      font-family: monospace;
+      transition: transform 0.2s, background 0.2s;
+    }
+
+    .btn:hover {
+      background: #ff2277;
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game">
+    <canvas id="c"></canvas>
+
+    <div class="ui">
+      <div style="display: flex; justify-content: space-between;">
+        <span>SCORE: <b id="score">0</b></span>
+        <span>HI: <b id="hi">0</b></span>
+      </div>
+    </div>
+
+    <div id="menu" class="overlay">
+      <h1>ASTEROID SURVIVOR</h1>
+      <p style="color: #aaa; font-size: 12px; line-height: 1.5;">
+        A / D or Arrow Keys or Mouse to move<br>
+        Space / Left Click to shoot lasers
+      </p>
+      <button class="btn" onclick="start()">PLAY GAME</button>
+    </div>
+
+    <div id="over" class="overlay" style="display: none;">
+      <h1 style="color: #ff0055; text-shadow: 0 0 10px #ff0055;">GAME OVER</h1>
+      <p>FINAL SCORE: <span id="f-score">0</span></p>
+      <button class="btn" onclick="start()">TRY AGAIN</button>
+    </div>
+  </div>
+
+  <script>
+    const cvs = document.getElementById('c');
+    const ctx = cvs.getContext('2d');
+    const W = 440;
+    const H = 640;
+
+    cvs.width = W;
+    cvs.height = H;
+
+    let actx;
+    let score = 0;
+    let hi = localStorage.getItem('as_hi') || 0;
+    let state = 'menu';
+    let keys = {};
+    let mouseX = W / 2;
+    let isUsingMouse = false;
+
+    let p = { x: W / 2, y: H - 40, speed: 6 };
+    let bullets = [];
+    let rocks = [];
+    let stars = [];
+    let pts = [];
+
+    document.getElementById('hi').innerText = hi;
+
+    function snd(t) {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+
+      let o = actx.createOscillator();
+      let g = actx.createGain();
+      let now = actx.currentTime;
+
+      o.connect(g);
+      g.connect(actx.destination);
+
+      if (t === 'shoot') {
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(600, now);
+        o.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+        g.gain.setValueAtTime(0.08, now);
+        g.gain.linearRampToValueAtTime(0.01, now + 0.1);
+        o.start();
+        o.stop(now + 0.1);
+      } else if (t === 'boom') {
+        o.type = 'square';
+        o.frequency.setValueAtTime(120, now);
+        o.frequency.exponentialRampToValueAtTime(20, now + 0.25);
+        g.gain.setValueAtTime(0.2, now);
+        g.gain.linearRampToValueAtTime(0.01, now + 0.25);
+        o.start();
+        o.stop(now + 0.25);
+      } else if (t === 'star') {
+        o.type = 'sine';
+        o.frequency.setValueAtTime(800, now);
+        o.frequency.setValueAtTime(1200, now + 0.05);
+        g.gain.setValueAtTime(0.15, now);
+        g.gain.linearRampToValueAtTime(0.01, now + 0.12);
+        o.start();
+        o.stop(now + 0.12);
+      }
+    }
+
+    onkeydown = e => {
+      keys[e.code] = true;
+      if (['ArrowLeft', 'KeyA', 'ArrowRight', 'KeyD'].includes(e.code)) {
+        isUsingMouse = false;
+      }
+      if (e.code === 'Space' && state === 'play') shoot();
+    };
+
+    onkeyup = e => {
+      keys[e.code] = false;
+    };
+
+    cvs.onmousemove = e => {
+      let r = cvs.getBoundingClientRect();
+      mouseX = (e.clientX - r.left) * (W / r.width);
+      isUsingMouse = true;
+    };
+
+    cvs.onmousedown = () => {
+      if (state === 'play') shoot();
+    };
+
+    function shoot() {
+      bullets.push({ x: p.x, y: p.y - 16 });
+      snd('shoot');
+    }
+
+    function start() {
+      score = 0;
+      bullets = [];
+      rocks = [];
+      stars = [];
+      pts = [];
+      p.x = W / 2;
+      mouseX = W / 2;
+
+      document.getElementById('score').innerText = 0;
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('over').style.display = 'none';
+      state = 'play';
+    }
+
+    function addExplode(x, y, col, count = 10) {
+      for (let i = 0; i < count; i++) {
+        let a = Math.random() * Math.PI * 2;
+        let v = 1 + Math.random() * 4;
+        pts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 20, col });
+      }
+    }
+
+    function update() {
+      if (state !== 'play') return;
+
+      if (keys.ArrowLeft || keys.KeyA) {
+        p.x -= p.speed;
+        mouseX = p.x;
+      }
+      if (keys.ArrowRight || keys.KeyD) {
+        p.x += p.speed;
+        mouseX = p.x;
+      }
+
+      if (isUsingMouse && Math.abs(p.x - mouseX) > 4) {
+        p.x += (mouseX - p.x) * 0.15;
+      }
+
+      p.x = Math.max(20, Math.min(W - 20, p.x));
+
+      if (Math.random() < 0.04) {
+        rocks.push({ x: 20 + Math.random() * (W - 40), y: -20, r: 12 + Math.random() * 16, vy: 2 + Math.random() * 3 });
+      }
+
+      if (Math.random() < 0.015) {
+        stars.push({ x: 20 + Math.random() * (W - 40), y: -10, r: 8, vy: 2 });
+      }
+
+      bullets.forEach((b, bi) => {
+        b.y -= 10;
+        rocks.forEach((r, ri) => {
+          if (Math.hypot(b.x - r.x, b.y - r.y) < r.r + 4) {
+            bullets.splice(bi, 1);
+            rocks.splice(ri, 1);
+            score += 10;
+            snd('boom');
+            addExplode(r.x, r.y, '#ffaa00');
+            document.getElementById('score').innerText = score;
+          }
+        });
+      });
+      bullets = bullets.filter(b => b.y > -10);
+
+      rocks.forEach((r) => {
+        r.y += r.vy;
+        if (Math.hypot(p.x - r.x, p.y - r.y) < r.r + 12) {
+          snd('boom');
+          addExplode(p.x, p.y, '#ff0055', 25);
+          state = 'over';
+
+          if (score > hi) {
+            hi = score;
+            localStorage.setItem('as_hi', hi);
+            document.getElementById('hi').innerText = hi;
+          }
+
+          document.getElementById('f-score').innerText = score;
+          document.getElementById('over').style.display = 'flex';
+        }
+      });
+      rocks = rocks.filter(r => r.y < H + 30);
+
+      stars.forEach((s, si) => {
+        s.y += s.vy;
+        if (Math.hypot(p.x - s.x, p.y - s.y) < s.r + 15) {
+          stars.splice(si, 1);
+          score += 50;
+          snd('star');
+          addExplode(s.x, s.y, '#00f3ff', 12);
+          document.getElementById('score').innerText = score;
+        }
+      });
+      stars = stars.filter(s => s.y < H + 20);
+
+      pts.forEach(pt => {
+        pt.x += pt.vx;
+        pt.y += pt.vy;
+        pt.life--;
+      });
+      pts = pts.filter(pt => pt.life > 0);
+    }
+
+    function draw() {
+      ctx.fillStyle = '#020208';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = '#ffffff22';
+      for (let i = 0; i < 20; i++) {
+        ctx.fillRect((i * 37) % W, (i * 59 + Date.now() * 0.05) % H, 2, 2);
+      }
+
+      if (state === 'play') {
+        ctx.fillStyle = '#00f3ff';
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - 18);
+        ctx.lineTo(p.x + 14, p.y + 12);
+        ctx.lineTo(p.x - 14, p.y + 12);
+        ctx.fill();
+
+        ctx.fillStyle = '#ff0055';
+        ctx.fillRect(p.x - 3, p.y + 12, 6, 6);
+      }
+
+      ctx.fillStyle = '#00f3ff';
+      bullets.forEach(b => ctx.fillRect(b.x - 2, b.y - 8, 4, 10));
+
+      ctx.fillStyle = '#ffaa00';
+      rocks.forEach(r => {
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      ctx.fillStyle = '#ffdd00';
+      stars.forEach(s => {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      pts.forEach(pt => {
+        ctx.fillStyle = pt.col;
+        ctx.fillRect(pt.x, pt.y, 3, 3);
+      });
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
